@@ -396,7 +396,7 @@ public:
 
 // uber material
 // "type" will tell the actual type
-// ====== implement it in A2, if you want ======
+// ====== implement it in A1, if you want ======
 enum enumMaterialType {
 	MAT_LAMBERTIAN,
 	MAT_METAL,
@@ -635,7 +635,7 @@ public:
 	}
 
 	void rasterizeTriangle(const Triangle& tri, const float4x4& plm) const {
-		// ====== implement it in A1 ======
+		// ====== implement it in A2 ======
 		// rasterization of a triangle
 		// "plm" should be a matrix that contains perspective projection and the camera matrix
 		// you do not need to implement clipping
@@ -645,7 +645,7 @@ public:
 
 
 	bool raytraceTriangle(HitInfo& result, const Ray& ray, const Triangle& tri, float tMin, float tMax) const {
-		// ====== implement it in A2 ======
+		// ====== implement it in A1 ======
 		// ray-triangle intersection
 		// fill in "result" when there is an intersection
 		// return true/false if there is an intersection or not
@@ -1151,7 +1151,7 @@ private:
 
 
 
-// BVH node (for A2 extra)
+// BVH node (for A1 extra)
 class BVHNode {
 public:
 	bool isLeaf;
@@ -1162,7 +1162,7 @@ public:
 };
 
 
-// ====== implement it in A2 extra ======
+// ====== implement it in A1 extra ======
 // fill in the missing parts
 class BVH {
 public:
@@ -1237,7 +1237,7 @@ void BVH::sortAxis(int* obj_index, const char axis, const int li, const int ri) 
 
 //#define SAHBVH // use this in once you have SAH-BVH
 int BVH::splitBVH(int* obj_index, const int obj_num, const AABB& bbox) {
-	// ====== exntend it in A2 extra ======
+	// ====== extend it in A1 extra ======
 #ifndef SAHBVH
 	int bestAxis, bestIndex;
 	AABB bboxL, bboxR, bestbboxL, bestbboxR;
@@ -1546,7 +1546,7 @@ public:
 		return hit;
 	}
 
-	// camera -> screen matrix (given to you for A1)
+	// camera -> screen matrix (given to you for A2)
 	float4x4 perspectiveMatrix(float fovy, float aspect, float zNear, float zFar) const {
 		float4x4 m;
 		const float f = 1.0f / (tan(fovy * DegToRad / 2.0f));
@@ -1558,7 +1558,7 @@ public:
 		return m;
 	}
 
-	// model -> camera matrix (given to you for A1)
+	// model -> camera matrix (given to you for A2)
 	float4x4 lookatMatrix(const float3& _eye, const float3& _center, const float3& _up) const {
 		// transformation to the camera coordinate
 		float4x4 m;
@@ -1582,7 +1582,7 @@ public:
 
 	// rasterizer
 	void Rasterize() const {
-		// ====== implement it in A1 ======
+		// ====== implement it in A2 ======
 		// fill in plm by a proper matrix
 		const float4x4 pm = perspectiveMatrix(globalFOV, globalAspectRatio, globalDepthMin, globalDepthMax);
 		const float4x4 lm = lookatMatrix(globalEye, globalLookat, globalUp);
@@ -1596,7 +1596,7 @@ public:
 		}
 	}
 
-	// eye ray generation (given to you for A2)
+	// eye ray generation (given to you for A1)
 	Ray eyeRay(int x, int y) const {
 		// compute the camera coordinate system 
 		const float3 wDir = normalize(float3(-globalViewDir));
@@ -1613,7 +1613,7 @@ public:
 		return Ray(globalEye, normalize(pixelPos - globalEye));
 	}
 
-	// ray tracing (you probably don't need to change it in A2)
+	// ray tracing (you probably don't need to change it in A1)
 	void Raytrace() const {
 		FrameBuffer.clear();
 
@@ -1649,11 +1649,11 @@ static Scene globalScene;
 
 
 
-// ====== implement it in A2 ======
+// ====== implement it in A1 ======
 // fill in the missing parts
 static float3 shade(const HitInfo& hit, const float3& viewDir, const int level) {
 	if (hit.material->type == MAT_LAMBERTIAN) {
-		// you may want to add shadow ray tracing here in A2
+		// you may want to add shadow ray tracing here in A1
 		float3 L = float3(0.0f);
 		float3 brdf, irradiance;
 

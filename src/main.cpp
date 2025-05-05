@@ -50,13 +50,13 @@ static void setupScene(int argc, const char* argv[]) {
 static void A1(int argc, const char* argv[]) {
     setupScene(argc, argv);
     setupLightSource();
-    globalRenderType = RENDER_RASTERIZE;
+    globalRenderType = RENDER_RAYTRACE;
 }
 
 static void A2(int argc, const char* argv[]) {
     setupScene(argc, argv);
     setupLightSource();
-    globalRenderType = RENDER_RAYTRACE;
+    globalRenderType = RENDER_RASTERIZE;
 }
 
 static void A3(int argc, const char* argv[]) {
