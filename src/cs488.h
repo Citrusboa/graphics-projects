@@ -41,8 +41,8 @@ static GLFWwindow* globalGLFWindow;
 
 // window size and resolution
 // (do not make it too large - will be slow!)
-constexpr int globalWidth = 512;
-constexpr int globalHeight = 384;
+constexpr int globalWidth = 1020; // 512;
+constexpr int globalHeight = 920; // 384;
 
 
 // degree and radian

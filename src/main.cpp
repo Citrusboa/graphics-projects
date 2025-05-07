@@ -4,10 +4,20 @@ CS488Window CS488;
  
 // draw something in each frame
 static void draw() {
+    float2 center = float2(globalWidth * 0.5f, globalHeight * 0.5f);
+    float radius = 10.0f + 0.2f * globalFrameCount;
     for (int j = 0; j < globalHeight; j++) {
         for (int i = 0; i < globalWidth; i++) {
-            FrameBuffer.pixel(i, j) = float3(PCG32::rand()); // noise
+            //FrameBuffer.pixel(i, j) = float3(PCG32::rand()); // noise
             //FrameBuffer.pixel(i, j) = float3(0.5f * (cos((i + globalFrameCount) * 0.1f) + 1.0f)); // moving cosine
+            float dist = length(float2(i, j) - center);
+            float ring = 0.5f * (1.0f + cos(dist * 0.2f - radius * 0.1f));
+            float3 color = float3(
+                0.5f + 0.5f * sin(dist * 0.1f + globalFrameCount * 0.05f),
+                0.5f + 0.5f * cos(dist * 0.07f + globalFrameCount * 0.04f),
+                0.5f + 0.5f * sin(dist * 0.05f + globalFrameCount * 0.03f)
+                );
+            FrameBuffer.pixel(i, j) = color * ring;
         }
     }
 }
