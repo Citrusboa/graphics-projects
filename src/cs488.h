@@ -41,8 +41,8 @@ static GLFWwindow* globalGLFWindow;
 
 // window size and resolution
 // (do not make it too large - will be slow!)
-constexpr int globalWidth = 1020; // 512;
-constexpr int globalHeight = 920; // 384;
+constexpr int globalWidth = 512;
+constexpr int globalHeight = 384;
 
 
 // degree and radian
@@ -619,6 +619,23 @@ public:
 	std::vector<Material> materials;
 	AABB bbox;
 
+	float det3x3(float3 v0, float3 v1, float3 v2) const {
+		float V = dot(cross(v0, v1), v2);
+		return V;
+	}
+
+	bool validIntersection(float t, float tMin, float tMax, float3 b) const {
+
+		bool valid = (t < tMax) && (t > tMin) && (b.x < 1) && (b.x > 0) && 
+			(b.y < 1) && (b.y > 0) && (b.z < 1) && (b.z > 0);
+		return valid;
+	}
+
+	float baryInterpolate(float3 barycenter, float3 attribute) const {
+
+		return barycenter.x* attribute.x + barycenter.y * attribute.y + barycenter.z * attribute.z;
+	}
+
 	void transform(const float4x4& m) {
 		// ====== implement it if you want =====
 		// matrix transformation of an object	
@@ -649,7 +666,50 @@ public:
 		// ray-triangle intersection
 		// fill in "result" when there is an intersection
 		// return true/false if there is an intersection or not
-		return false;
+
+		// Cramer's Rule
+		float3 A_B = tri.positions[0] - tri.positions[1];
+		float3 A_C = tri.positions[0] - tri.positions[2];
+		float3 A_O = tri.positions[0] - ray.o;
+
+		// plane's normal: no need to normalize
+		float3 Norm = cross(A_B, A_C);
+		// Ray plane intersection: solving t from plane equation
+		float NdotRayDir = dot(Norm, ray.d);
+		if (fabs(NdotRayDir) < Epsilon) return false;	// Ray parallel to triangle
+
+		float D = det3x3(A_B, A_C, ray.d);
+		float Dbeta = det3x3(A_O, A_C, ray.d);
+		float Dgamma = det3x3(A_B, A_O, ray.d);
+		float Dt = det3x3(A_B, A_C, A_O);
+
+		float beta = Dbeta / D;
+		float gamma = Dgamma / D;
+		float alpha = 1.0f - beta - gamma;
+		float t = Dt / D;
+
+		float3 barycentric_coords = { alpha, beta, gamma };
+		if (!validIntersection(t, tMin, tMax, barycentric_coords)) {
+			return false;
+		}
+
+		result.material = &materials[tri.idMaterial];
+		result.t = t;
+		result.P = ray.o + t * ray.d;
+
+		float3 N = {
+			baryInterpolate(barycentric_coords, {tri.normals[0].x, tri.normals[1].x, tri.normals[2].x}),
+			baryInterpolate(barycentric_coords, {tri.normals[0].y, tri.normals[1].y, tri.normals[2].y}),
+			baryInterpolate(barycentric_coords, {tri.normals[0].z, tri.normals[1].z, tri.normals[2].z})
+		};
+		result.N = normalize(N);
+
+		float2 T = {
+			baryInterpolate(barycentric_coords, {tri.texcoords[0].x, tri.texcoords[1].x, tri.texcoords[2].x}),
+			baryInterpolate(barycentric_coords, {tri.texcoords[0].y, tri.texcoords[1].y, tri.texcoords[2].y})
+		};
+		result.T = T;
+		return true;
 	}
 
 
@@ -1425,6 +1485,9 @@ public:
 		// === fill in this part in A3 ===
 		// update the particle position and velocity here
 
+		//float3 newpos;
+		//newpos = position + (position - temp) + deltaT * deltaT * globalGravity;
+		//position = newpos;
 		prevPosition = temp;
 	}
 };
@@ -1647,7 +1710,12 @@ public:
 static Scene globalScene;
 
 
-
+static float3 shadeMetal(const HitInfo& hit, const float3& viewDir, const int level) {
+	return float3(0.0f);
+}
+static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int level) {
+	return float3(0.0f);
+}
 
 // ====== implement it in A1 ======
 // fill in the missing parts
@@ -1674,22 +1742,22 @@ static float3 shade(const HitInfo& hit, const float3& viewDir, const int level) 
 			if (hit.material->isTextured) {
 				brdf *= hit.material->fetchTexture(hit.T);
 			}
-			return brdf * PI; //debug output
+			//return brdf * PI; //debug output
 
 			L += irradiance * brdf;
 		}
 		return L;
 	} else if (hit.material->type == MAT_METAL) {
-		return float3(0.0f); // replace this
+		return shadeMetal(hit, viewDir, level);
+		//return float3(0.0f); // replace this
 	} else if (hit.material->type == MAT_GLASS) {
-		return float3(0.0f); // replace this
+		return shadeGlass(hit, viewDir, level);
+		//return float3(0.0f); // replace this
 	} else {
 		// something went wrong - make it apparent that it is an error
 		return float3(100.0f, 0.0f, 100.0f);
 	}
 }
-
-
 
 
 
