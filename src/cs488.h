@@ -148,6 +148,7 @@ public:
 	std::vector<float3> pixels;
 	std::vector<float> depths;
 	int width = 0, height = 0;
+	bool loaded = false;
 
 	static float toneMapping(const float r) {
 		// you may want to implement better tone mapping
@@ -1688,7 +1689,7 @@ public:
 				if (intersect(hitInfo, ray)) {
 					FrameBuffer.pixel(i, j) = shade(hitInfo, -ray.d);
 				} else {
-					FrameBuffer.pixel(i, j) = float3(0.0f);
+					FrameBuffer.pixel(i, j) = float3(0.0f);				
 				}
 			}
 
@@ -1706,29 +1707,53 @@ public:
 		}
 	}
 
+	//float3 envColor(float3 dir) const {
+	//	float3 color;
+
+	//	if (envMap.loaded = true) {
+	//		float r = (1 / PI) * acos(dir.z) / sqrt(dir.x * dir.x + dir.y * dir.y);
+	//		float2 tex = { dir.x * r, dir.y * r };
+	//		tex = (tex + 1.0f) * 0.5f;
+	//		int x = int(tex.x * envMap.width);
+	//		int y = int(tex.y * envMap.height);
+	//		color = envMap.pixel(x, y);
+	//	}
+	//	else {
+	//		color = float3(0.0f);
+	//	}
+	//	return color;
+	//}
+
 };
 static Scene globalScene;
 
-
-static float3 shadeMetal(const HitInfo& hit, const float3& viewDir, const int level) {
-	return float3(0.0f);
-}
-static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int level) {
-	return float3(0.0f);
+static float3 reflect(const float3& viewDir, const float3& normal) {
+	return viewDir - 2 * dot(viewDir, normal) * normal;
 }
 
-// ====== implement it in A1 ======
-// fill in the missing parts
-static float3 shade(const HitInfo& hit, const float3& viewDir, const int level) {
-	if (hit.material->type == MAT_LAMBERTIAN) {
-		// you may want to add shadow ray tracing here in A1
-		float3 L = float3(0.0f);
-		float3 brdf, irradiance;
+static bool refract(const float3& incident, const float3& normal, float ir, float3& refractedDir) {
 
-		// loop over all of the point light sources
-		for (int i = 0; i < globalScene.pointLightSources.size(); i++) {
-			float3 l = globalScene.pointLightSources[i]->position - hit.P;
+	return false;
+}
 
+static float3 shadeLambertian(const HitInfo& hit, const float3& viewDir, const int level) {
+	// you may want to add shadow ray tracing here in A1
+	float3 L = float3(0.0f);
+	float3 brdf, irradiance;
+
+	// loop over all of the point light sources
+	for (int i = 0; i < globalScene.pointLightSources.size(); i++) {
+		float3 l = globalScene.pointLightSources[i]->position - hit.P;
+		float l_dist = length(l);
+
+		// Shadow Ray 
+		Ray shadowRay;
+		shadowRay.o = hit.P + hit.N * Epsilon;
+		shadowRay.d = normalize(l);
+
+		HitInfo shadowHit;
+			
+		if (!globalScene.intersect(shadowHit, shadowRay, Epsilon, l_dist - Epsilon)) {
 			// the inverse-squared falloff
 			const float falloff = length2(l);
 
@@ -1746,7 +1771,116 @@ static float3 shade(const HitInfo& hit, const float3& viewDir, const int level) 
 
 			L += irradiance * brdf;
 		}
-		return L;
+	}
+	return L;
+}
+
+static float3 shadeDebug(const HitInfo& hit, const float3& viewDir, const int level) {
+	// you may want to add shadow ray tracing here in A1
+	float3 L = float3(0.0f);
+	float3 brdf, irradiance;
+
+	// loop over all of the point light sources
+	for (int i = 0; i < globalScene.pointLightSources.size(); i++) {
+		float3 l = globalScene.pointLightSources[i]->position - hit.P;
+		// the inverse-squared falloff
+		const float falloff = length2(l);
+
+		// normalize the light direction
+		l /= sqrtf(falloff);
+
+		// get the irradiance
+		irradiance = float(std::max(0.0f, dot(hit.N, l)) / (4.0 * PI * falloff)) * globalScene.pointLightSources[i]->wattage;
+		brdf = hit.material->BRDF(l, viewDir, hit.N);
+
+		if (hit.material->isTextured) {
+			brdf *= hit.material->fetchTexture(hit.T);
+		}
+		return brdf * PI; //debug output
+
+		L += irradiance * brdf;
+		
+	}
+	return L;
+}
+
+static float3 shadeMetal(const HitInfo& hit, const float3& viewDir, const int level) {
+	const int MAX_LEVEL = 4;
+	if (level >= MAX_LEVEL) {
+		return float3(0.0f);
+	}
+	float3 reflectedDir = reflect(viewDir, hit.N);
+	Ray reflectedRay;
+	reflectedRay.o = hit.P + hit.N * Epsilon; // avoid self-intersection
+	reflectedRay.d = normalize(-reflectedDir);
+
+	HitInfo reflectedHitInfo;
+	if (globalScene.intersect(reflectedHitInfo, reflectedRay, Epsilon)) {
+		return hit.material->Ks * shade(reflectedHitInfo, -reflectedRay.d, level + 1);
+	}
+	else {
+		return float3(0.0f);
+	}
+}
+static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int level) {
+	const int MAX_LEVEL = 4;
+	if (level >= MAX_LEVEL) {
+		return float3(0.0f);
+	}
+
+	float3 refractedDir;
+	float eta = hit.material->eta;
+	float3 N = hit.N;
+
+	float cos_theta = dot(viewDir, N);
+	bool entering = cos_theta < 0.0f;
+
+	if (!entering) {
+		eta = 1.0f / eta;
+		N = -N;
+	}
+	cos_theta = dot(viewDir, N);
+
+	float k = 1.0f - eta * eta * (1.0f - cos_theta * cos_theta);
+
+	if (k < 0.0f) {
+		// Total internal reflection
+		refractedDir = reflect(viewDir, hit.N);
+		Ray reflectedRay;
+		reflectedRay.o = hit.P;
+		reflectedRay.d = normalize(-refractedDir);
+		
+		HitInfo reflectedHitInfo;
+		if (globalScene.intersect(reflectedHitInfo, reflectedRay, Epsilon)) {
+			return hit.material->Ks * shade(reflectedHitInfo, -reflectedRay.d, level + 1);
+		}
+		else {
+			return float3(0.0f);
+		}
+
+	} else {
+		refractedDir = eta * (viewDir - cos_theta * N) - sqrt(k) * N;
+		
+		Ray refractedRay;
+		refractedRay.o = hit.P;
+		refractedRay.d = normalize(-refractedDir);
+
+		HitInfo refractedHitInfo;
+		if (globalScene.intersect(refractedHitInfo, refractedRay, Epsilon)) {
+			return shade(refractedHitInfo, -refractedRay.d, level + 1);
+		}
+		else {
+			return float3(0.0f);
+		}
+	}
+}
+
+// ====== implement it in A1 ======
+// fill in the missing parts
+static float3 shade(const HitInfo& hit, const float3& viewDir, const int level) {
+	if (hit.material->type == MAT_LAMBERTIAN) {
+		return shadeLambertian(hit, viewDir, level);
+		//return shadeDebug(hit, viewDir, level);
 	} else if (hit.material->type == MAT_METAL) {
 		return shadeMetal(hit, viewDir, level);
 		//return float3(0.0f); // replace this
@@ -1776,7 +1910,7 @@ public:
 
 		// create a window
 		glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
-		globalGLFWindow = glfwCreateWindow(globalWidth, globalHeight, "Welcome to CS488/688!", NULL, NULL);
+		globalGLFWindow = glfwCreateWindow(globalWidth, globalHeight, "Welcome to CS488/688! Ivy A1", NULL, NULL);
 		if (globalGLFWindow == NULL) {
 			std::cerr << "Failed to open GLFW window." << std::endl;
 			glfwTerminate();
