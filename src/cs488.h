@@ -52,7 +52,8 @@ constexpr float RadToDeg = 180.0f / PI;
 
 
 // for ray tracing
-constexpr float Epsilon = 5e-5f;
+constexpr float Epsilon = 5e-6f; // 5e-5f;
+constexpr float miniEps = 1e-6f;
 
 
 // amount the camera moves with a mouse and a keyboard
@@ -501,6 +502,7 @@ public:
 	float t; // distance
 	float3 P; // location
 	float3 N; // shading normal vector
+	float3 N_g; // geometric normal vector
 	float2 T; // texture coordinate
 	const Material* material; // const pointer to the material of the intersected object
 };
@@ -695,20 +697,14 @@ public:
 		}
 
 		result.material = &materials[tri.idMaterial];
+		result.N_g = normalize(Norm);
 		result.t = t;
 		result.P = ray.o + t * ray.d;
 
-		float3 N = {
-			baryInterpolate(barycentric_coords, {tri.normals[0].x, tri.normals[1].x, tri.normals[2].x}),
-			baryInterpolate(barycentric_coords, {tri.normals[0].y, tri.normals[1].y, tri.normals[2].y}),
-			baryInterpolate(barycentric_coords, {tri.normals[0].z, tri.normals[1].z, tri.normals[2].z})
-		};
+		float3 N = barycentric_coords.x * tri.normals[0] + barycentric_coords.y * tri.normals[1] + barycentric_coords.z * tri.normals[2];
 		result.N = normalize(N);
 
-		float2 T = {
-			baryInterpolate(barycentric_coords, {tri.texcoords[0].x, tri.texcoords[1].x, tri.texcoords[2].x}),
-			baryInterpolate(barycentric_coords, {tri.texcoords[0].y, tri.texcoords[1].y, tri.texcoords[2].y})
-		};
+		float2 T = barycentric_coords.x * tri.texcoords[0] + barycentric_coords.y * tri.texcoords[1] + barycentric_coords.z * tri.texcoords[2];
 		result.T = T;
 		return true;
 	}
@@ -758,6 +754,7 @@ public:
 				if (materials[i].name.compare(0, 5, "glass", 0, 5) == 0) {
 					materials[i].type = MAT_GLASS;
 					materials[i].eta = 1.5f;
+					//materials[i].Ks = float3(0.9f, 0.9f, 0.9f);
 				}
 			}
 		} else {
@@ -1748,12 +1745,12 @@ static float3 shadeLambertian(const HitInfo& hit, const float3& viewDir, const i
 
 		// Shadow Ray 
 		Ray shadowRay;
-		shadowRay.o = hit.P + hit.N * Epsilon;
+		shadowRay.o = hit.P + hit.N * Epsilon;	// avoid self-intersection
 		shadowRay.d = normalize(l);
 
 		HitInfo shadowHit;
 			
-		if (!globalScene.intersect(shadowHit, shadowRay, Epsilon, l_dist - Epsilon)) {
+		if (!globalScene.intersect(shadowHit, shadowRay, miniEps, l_dist)) { // - Epsilon
 			// the inverse-squared falloff
 			const float falloff = length2(l);
 
@@ -1771,6 +1768,9 @@ static float3 shadeLambertian(const HitInfo& hit, const float3& viewDir, const i
 
 			L += irradiance * brdf;
 		}
+		//else {
+		//	return float3(1.0f, 0.0f, 0.0f);
+		//}
 	}
 	return L;
 }
@@ -1815,15 +1815,15 @@ static float3 shadeMetal(const HitInfo& hit, const float3& viewDir, const int le
 	reflectedRay.d = normalize(-reflectedDir);
 
 	HitInfo reflectedHitInfo;
-	if (globalScene.intersect(reflectedHitInfo, reflectedRay, Epsilon)) {
-		return hit.material->Ks * shade(reflectedHitInfo, -reflectedRay.d, level + 1);
+	if (globalScene.intersect(reflectedHitInfo, reflectedRay, miniEps)) {
+		return hit.material->Ks * shade(reflectedHitInfo, -reflectedRay.d, level + 1); // hit.material->Ks * 
 	}
 	else {
 		return float3(0.0f);
 	}
 }
 static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int level) {
-	const int MAX_LEVEL = 4;
+	const int MAX_LEVEL = 5;
 	if (level >= MAX_LEVEL) {
 		return float3(0.0f);
 	}
@@ -1838,8 +1838,9 @@ static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int le
 	if (!entering) {
 		eta = 1.0f / eta;
 		N = -N;
+		cos_theta = -cos_theta;
 	}
-	cos_theta = dot(viewDir, N);
+	//cos_theta = dot(viewDir, N);
 
 	float k = 1.0f - eta * eta * (1.0f - cos_theta * cos_theta);
 
@@ -1847,26 +1848,26 @@ static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int le
 		// Total internal reflection
 		refractedDir = reflect(viewDir, hit.N);
 		Ray reflectedRay;
-		reflectedRay.o = hit.P;
+		reflectedRay.o = hit.P + N * Epsilon;
 		reflectedRay.d = normalize(-refractedDir);
 		
 		HitInfo reflectedHitInfo;
-		if (globalScene.intersect(reflectedHitInfo, reflectedRay, Epsilon)) {
-			return hit.material->Ks * shade(reflectedHitInfo, -reflectedRay.d, level + 1);
+		if (globalScene.intersect(reflectedHitInfo, reflectedRay, miniEps)) {
+			return hit.material->Ks * shade(reflectedHitInfo, -reflectedRay.d, level + 1); // hit.material->Ks
 		}
 		else {
-			return float3(0.0f);
+			return float3(0.f);
 		}
 
 	} else {
 		refractedDir = eta * (viewDir - cos_theta * N) - sqrt(k) * N;
 		
 		Ray refractedRay;
-		refractedRay.o = hit.P;
+		refractedRay.o = hit.P + N * Epsilon;
 		refractedRay.d = normalize(-refractedDir);
 
 		HitInfo refractedHitInfo;
-		if (globalScene.intersect(refractedHitInfo, refractedRay, Epsilon)) {
+		if (globalScene.intersect(refractedHitInfo, refractedRay, miniEps)) {
 			return shade(refractedHitInfo, -refractedRay.d, level + 1);
 		}
 		else {
