@@ -44,6 +44,13 @@ static void setupLightSource() {
 static TriangleMesh mesh;
 static void setupScene(int argc, const char* argv[]) {
     if (argc > 1) {
+        if (argc > 2) {
+            // Load environment map
+            //EnvironMap.load("../media/uffizi_probe.hdr");
+            EnvironMap.load(argv[2]);
+            EnvironMap.loaded = true;
+        }
+
         bool objLoadSucceed = mesh.load(argv[1]);
         if (!objLoadSucceed) {
             printf("Invalid .obj file.\n");

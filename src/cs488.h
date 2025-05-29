@@ -238,7 +238,8 @@ Image FrameBuffer(globalWidth, globalHeight);
 Image AccumulationBuffer(globalWidth, globalHeight);
 unsigned int sampleCount = 0;
 
-
+// Environment map
+static Image EnvironMap;
 
 // keyboard events (you do not need to modify it unless you want to)
 void keyFunc(GLFWwindow* window, int key, int scancode, int action, int mods) {
@@ -697,12 +698,15 @@ public:
 		}
 
 		result.material = &materials[tri.idMaterial];
-		result.N_g = normalize(Norm);
 		result.t = t;
 		result.P = ray.o + t * ray.d;
 
 		float3 N = barycentric_coords.x * tri.normals[0] + barycentric_coords.y * tri.normals[1] + barycentric_coords.z * tri.normals[2];
 		result.N = normalize(N);
+		result.N_g = normalize(Norm);
+		if (dot(Norm, N) < 0.0f) {
+			result.N_g = -result.N_g;
+		}
 
 		float2 T = barycentric_coords.x * tri.texcoords[0] + barycentric_coords.y * tri.texcoords[1] + barycentric_coords.z * tri.texcoords[2];
 		result.T = T;
@@ -1589,6 +1593,23 @@ public:
 		}
 	}
 
+	// Fetch environment map
+	float3 getEnvironment(const float3& dir) const {
+		float3 color = float3(0.0f);
+
+		if (EnvironMap.loaded) {
+			float3 d = normalize(dir);
+
+			float r = (1.0f / PI) * acos(d.z) / sqrt(d.x * d.x + d.y * d.y);
+			float2 env = { d.x * r, d.y * r }; // between [-1, 1]
+			env = (env + 1.0f) * 0.5f;
+			int x = int(env.x * EnvironMap.width);
+			int y = int(env.y * EnvironMap.height);
+			color = EnvironMap.pixel(x, y);
+		}
+		return color;
+	}
+
 	// ray-scene intersection
 	bool intersect(HitInfo& minHit, const Ray& ray, float tMin = 0.0f, float tMax = FLT_MAX) const {
 		bool hit = false;
@@ -1686,7 +1707,11 @@ public:
 				if (intersect(hitInfo, ray)) {
 					FrameBuffer.pixel(i, j) = shade(hitInfo, -ray.d);
 				} else {
-					FrameBuffer.pixel(i, j) = float3(0.0f);				
+					if (EnvironMap.loaded) {
+						FrameBuffer.pixel(i, j) = getEnvironment(ray.d);
+					} else {
+						FrameBuffer.pixel(i, j) = float3(0.0f);				
+					}
 				}
 			}
 
@@ -1704,24 +1729,8 @@ public:
 		}
 	}
 
-	//float3 envColor(float3 dir) const {
-	//	float3 color;
-
-	//	if (envMap.loaded = true) {
-	//		float r = (1 / PI) * acos(dir.z) / sqrt(dir.x * dir.x + dir.y * dir.y);
-	//		float2 tex = { dir.x * r, dir.y * r };
-	//		tex = (tex + 1.0f) * 0.5f;
-	//		int x = int(tex.x * envMap.width);
-	//		int y = int(tex.y * envMap.height);
-	//		color = envMap.pixel(x, y);
-	//	}
-	//	else {
-	//		color = float3(0.0f);
-	//	}
-	//	return color;
-	//}
-
 };
+
 static Scene globalScene;
 
 static float3 reflect(const float3& viewDir, const float3& normal) {
@@ -1807,25 +1816,32 @@ static float3 shadeDebug(const HitInfo& hit, const float3& viewDir, const int le
 static float3 shadeMetal(const HitInfo& hit, const float3& viewDir, const int level) {
 	const int MAX_LEVEL = 4;
 	if (level >= MAX_LEVEL) {
-		return float3(0.0f);
+		return globalScene.getEnvironment(viewDir);
 	}
 	float3 reflectedDir = reflect(viewDir, hit.N);
+
+	// check shading (interpolated) normal
+	//if (dot(hit.N_g, reflectedDir) < 0.0f) { // reflected Dir on the wrong side
+	//	reflectedDir = reflectedDir - 2.0f * dot(reflectedDir, hit.N_g) * hit.N_g;
+	//}
+
 	Ray reflectedRay;
 	reflectedRay.o = hit.P + hit.N * Epsilon; // avoid self-intersection
 	reflectedRay.d = normalize(-reflectedDir);
 
 	HitInfo reflectedHitInfo;
 	if (globalScene.intersect(reflectedHitInfo, reflectedRay, miniEps)) {
-		return hit.material->Ks * shade(reflectedHitInfo, -reflectedRay.d, level + 1); // hit.material->Ks * 
+		return hit.material->Ks * shade(reflectedHitInfo, -reflectedRay.d, level + 1);
 	}
 	else {
-		return float3(0.0f);
+		return globalScene.getEnvironment(reflectedRay.d);
 	}
 }
+
 static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int level) {
 	const int MAX_LEVEL = 5;
 	if (level >= MAX_LEVEL) {
-		return float3(0.0f);
+		return globalScene.getEnvironment(viewDir);
 	}
 
 	float3 refractedDir;
@@ -1847,31 +1863,37 @@ static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int le
 	if (k < 0.0f) {
 		// Total internal reflection
 		refractedDir = reflect(viewDir, hit.N);
+		
+		// Ensure reflection direction is on correct side of geometric normal
+		if (dot(hit.N_g, refractedDir) < 0.0f) {
+			refractedDir = refractedDir - dot(2.0f * refractedDir, hit.N_g) * hit.N_g;
+		}
+
 		Ray reflectedRay;
-		reflectedRay.o = hit.P + N * Epsilon;
+		reflectedRay.o = hit.P; //  +N * Epsilon;
 		reflectedRay.d = normalize(-refractedDir);
 		
 		HitInfo reflectedHitInfo;
-		if (globalScene.intersect(reflectedHitInfo, reflectedRay, miniEps)) {
+		if (globalScene.intersect(reflectedHitInfo, reflectedRay, Epsilon)) {
 			return hit.material->Ks * shade(reflectedHitInfo, -reflectedRay.d, level + 1); // hit.material->Ks
 		}
 		else {
-			return float3(0.f);
+			return globalScene.getEnvironment(reflectedRay.d);
 		}
 
 	} else {
 		refractedDir = eta * (viewDir - cos_theta * N) - sqrt(k) * N;
 		
 		Ray refractedRay;
-		refractedRay.o = hit.P + N * Epsilon;
+		refractedRay.o = hit.P; //  +N * Epsilon;
 		refractedRay.d = normalize(-refractedDir);
 
 		HitInfo refractedHitInfo;
-		if (globalScene.intersect(refractedHitInfo, refractedRay, miniEps)) {
+		if (globalScene.intersect(refractedHitInfo, refractedRay, Epsilon)) {
 			return shade(refractedHitInfo, -refractedRay.d, level + 1);
 		}
 		else {
-			return float3(0.0f);
+			return globalScene.getEnvironment(refractedRay.d);
 		}
 	}
 }
@@ -1880,8 +1902,8 @@ static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int le
 // fill in the missing parts
 static float3 shade(const HitInfo& hit, const float3& viewDir, const int level) {
 	if (hit.material->type == MAT_LAMBERTIAN) {
-		return shadeLambertian(hit, viewDir, level);
-		//return shadeDebug(hit, viewDir, level);
+		//return shadeLambertian(hit, viewDir, level);
+		return shadeDebug(hit, viewDir, level);
 	} else if (hit.material->type == MAT_METAL) {
 		return shadeMetal(hit, viewDir, level);
 		//return float3(0.0f); // replace this
