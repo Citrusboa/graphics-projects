@@ -34,6 +34,9 @@ using namespace linalg::aliases;
 #include <vector>
 #include <cfloat>
 #include <chrono>
+#include <windows.h>
+#include <string>
+
 
 // main window
 static GLFWwindow* globalGLFWindow;
@@ -140,7 +143,12 @@ namespace PCG32 {
 	}
 }
 
-
+std::string getExecutableDir() {
+	char path[MAX_PATH];
+	GetModuleFileNameA(NULL, path, MAX_PATH);
+	std::string fullPath(path);
+	return fullPath.substr(0, fullPath.find_last_of("\\/"));
+}
 
 // image with a depth buffer
 // (depth buffer is not always needed, but hey, we have a few GB of memory, so it won't be an issue...)
@@ -196,12 +204,12 @@ public:
 		return this->pixels[i + j * width];
 	}
 
-	void load(const char* fileName) {
+	int load(const char* fileName) {
 		int comp, w, h;
 		float* buf = stbi_loadf(fileName, &w, &h, &comp, 3);
 		if (!buf) {
 			std::cerr << "Unable to load: " << fileName << std::endl;
-			return;
+			return 0;
 		}
 
 		this->resize(w, h);
@@ -214,7 +222,9 @@ public:
 		}
 		delete[] buf;
 		printf("Loaded \"%s\".\n", fileName);
+		return 1;
 	}
+
 	void save(const char* fileName) {
 		unsigned char* buf = new unsigned char[width * height * 3];
 		int k = 0;
@@ -1995,7 +2005,9 @@ static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int le
 // fill in the missing parts
 static float3 shade(const HitInfo& hit, const float3& viewDir, const int level) {
 	if (hit.material->type == MAT_LAMBERTIAN) {
+		// For shadows
 		return shadeLambertian(hit, viewDir, level);
+		// For no shadows
 		//return shadeDebug(hit, viewDir, level);
 	} else if (hit.material->type == MAT_METAL) {
 		return shadeMetal(hit, viewDir, level);
