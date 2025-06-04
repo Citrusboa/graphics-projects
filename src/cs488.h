@@ -33,7 +33,7 @@ using namespace linalg::aliases;
 #include <iostream>
 #include <vector>
 #include <cfloat>
-
+#include <chrono>
 
 // main window
 static GLFWwindow* globalGLFWindow;
@@ -52,7 +52,7 @@ constexpr float RadToDeg = 180.0f / PI;
 
 
 // for ray tracing
-constexpr float Epsilon = 5e-6f; // 5e-5f;
+constexpr float Epsilon = 2e-6f; // 5e-5f;
 constexpr float miniEps = 1e-6f;
 
 
@@ -1336,7 +1336,92 @@ int BVH::splitBVH(int* obj_index, const int obj_num, const AABB& bbox) {
 	bestbboxL = bboxL;
 	bestbboxR = bboxR;
 #else
-	// implelement SAH-BVH here
+	// implement SAH-BVH here
+	int bestAxis = 0, bestIndex = 0;
+	float bestCost = FLT_MAX;
+	AABB bboxL, bboxR, bestbboxL, bestbboxR;
+	int* sorted_obj_index = new int[obj_num];
+
+	// Evaluate along all three axes
+	for (int axis = 0; axis < 3; ++axis) {
+
+		this->sortAxis(obj_index, axis, 0, obj_num - 1);
+		for (int i = 0; i < obj_num; ++i) {
+			sorted_obj_index[i] = obj_index[i];
+		}
+
+		for (int split = 1; split < obj_num; ++split) {
+
+			bboxL.reset();
+			for (int i = 0; i < split; ++i) {
+				const Triangle& tri = triangleMesh->triangles[sorted_obj_index[i]];
+				bboxL.fit(tri.positions[0]);
+				bboxL.fit(tri.positions[1]);
+				bboxL.fit(tri.positions[2]);
+			}
+
+			bboxR.reset();
+			for (int i = split; i < obj_num; ++i) {
+				const Triangle& tri = triangleMesh->triangles[sorted_obj_index[i]];
+				bboxR.fit(tri.positions[0]);
+				bboxR.fit(tri.positions[1]);
+				bboxR.fit(tri.positions[2]);
+			}
+
+			float SA_parent = bbox.area();
+			float SA_left = bboxL.area();
+			float SA_right = bboxR.area();
+			float cost = costBBox + (SA_left / SA_parent) * split * costTri + 
+				(SA_right / SA_parent) * (obj_num - split) * costTri;
+
+			if (cost < bestCost) {
+				bestCost = cost;
+				bestAxis = axis;
+				bestIndex = split - 1;
+				bestbboxL = bboxL;
+				bestbboxR = bboxR;
+			}
+		}
+
+
+	}
+	this->sortAxis(obj_index, bestAxis, 0, obj_num - 1);
+	for (int i = 0; i < obj_num; ++i) {
+		sorted_obj_index[i] = obj_index[i];
+	}
+
+	float original_cost = obj_num * costTri;
+	// If SAH cost is not better than simple case
+	if (original_cost <= bestCost) {
+		bestAxis = bbox.getLargestAxis();
+		this->sortAxis(obj_index, bestAxis, 0, obj_num - 1);
+		for (int i = 0; i < obj_num; ++i) {
+			sorted_obj_index[i] = obj_index[i];
+		}
+
+		// split in the middle
+		bestIndex = obj_num / 2 - 1;
+
+		bboxL.reset();
+		for (int i = 0; i <= bestIndex; ++i) {
+			const Triangle& tri = triangleMesh->triangles[obj_index[i]];
+			bboxL.fit(tri.positions[0]);
+			bboxL.fit(tri.positions[1]);
+			bboxL.fit(tri.positions[2]);
+		}
+
+		bboxR.reset();
+		for (int i = bestIndex + 1; i < obj_num; ++i) {
+			const Triangle& tri = triangleMesh->triangles[obj_index[i]];
+			bboxR.fit(tri.positions[0]);
+			bboxR.fit(tri.positions[1]);
+			bboxR.fit(tri.positions[2]);
+		}
+
+		bestbboxL = bboxL;
+		bestbboxR = bboxR;
+	}
+
 #endif
 
 	if (obj_num <= 4) {
@@ -1699,6 +1784,9 @@ public:
 	void Raytrace() const {
 		FrameBuffer.clear();
 
+		// start timer
+		auto start = std::chrono::high_resolution_clock::now();
+
 		// loop over all pixels in the image
 		for (int j = 0; j < globalHeight; ++j) {
 			for (int i = 0; i < globalWidth; ++i) {
@@ -1727,6 +1815,11 @@ public:
 				}
 			}
 		}
+		// end timer
+		 auto end = std::chrono::high_resolution_clock::now();
+		// report speedup
+		 auto elapsed_time = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+		 std::cout << "Render time: " << elapsed_time.count() << " ms\n";
 	}
 
 };
@@ -1870,7 +1963,7 @@ static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int le
 		}
 
 		Ray reflectedRay;
-		reflectedRay.o = hit.P; //  +N * Epsilon;
+		reflectedRay.o = hit.P + N * Epsilon;
 		reflectedRay.d = normalize(-refractedDir);
 		
 		HitInfo reflectedHitInfo;
@@ -1885,7 +1978,7 @@ static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int le
 		refractedDir = eta * (viewDir - cos_theta * N) - sqrt(k) * N;
 		
 		Ray refractedRay;
-		refractedRay.o = hit.P; //  +N * Epsilon;
+		refractedRay.o = hit.P + N * Epsilon;
 		refractedRay.d = normalize(-refractedDir);
 
 		HitInfo refractedHitInfo;
@@ -1902,8 +1995,8 @@ static float3 shadeGlass(const HitInfo& hit, const float3& viewDir, const int le
 // fill in the missing parts
 static float3 shade(const HitInfo& hit, const float3& viewDir, const int level) {
 	if (hit.material->type == MAT_LAMBERTIAN) {
-		//return shadeLambertian(hit, viewDir, level);
-		return shadeDebug(hit, viewDir, level);
+		return shadeLambertian(hit, viewDir, level);
+		//return shadeDebug(hit, viewDir, level);
 	} else if (hit.material->type == MAT_METAL) {
 		return shadeMetal(hit, viewDir, level);
 		//return float3(0.0f); // replace this
