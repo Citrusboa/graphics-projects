@@ -638,10 +638,6 @@ public:
 		return valid;
 	}
 
-	float baryInterpolate(float3 barycenter, float3 attribute) const {
-
-		return barycenter.x* attribute.x + barycenter.y * attribute.y + barycenter.z * attribute.z;
-	}
 
 	void transform(const float4x4& m) {
 		// ====== implement it if you want =====
@@ -658,6 +654,37 @@ public:
 		}
 	}
 
+	float4 ndcToScreen(const float4 ndcPos) const {
+		// convert from [-1, 1] to [0, 1]
+		float4 screenPos;
+		screenPos.x = linalg::lerp(0.0f, globalWidth, (ndcPos.x + 1.0f) * 0.5f);
+		screenPos.y = linalg::lerp(0.0f, globalHeight, (ndcPos.y + 1.0f) * 0.5f);
+		screenPos.z = linalg::lerp(globalDepthMin, globalDepthMax, (ndcPos.z + 1.0f) * 0.5f);
+		screenPos.w = ndcPos.w;
+		return screenPos;
+	}
+
+	bool isInside(const float4 triPos[3], const float2 pix) const {
+		// Point in triangle test
+		float L0 = -(pix.x - triPos[0].x) * (triPos[1].y - triPos[0].y) + (pix.y - triPos[0].y) * (triPos[1].x - triPos[0].x);
+		float L1 = -(pix.x - triPos[1].x) * (triPos[2].y - triPos[1].y) + (pix.y - triPos[1].y) * (triPos[2].x - triPos[1].x);
+		float L2 = -(pix.x - triPos[2].x) * (triPos[0].y - triPos[2].y) + (pix.y - triPos[2].y) * (triPos[0].x - triPos[2].x);
+
+		return ((L0 > 0) && (L1 > 0) && (L2 > 0));
+	}
+
+	float3 baryInterpolate(const float4 P, const float4 A, const float4 B, const float4 C) const {
+		// compute area
+		auto f = [](const float4 P, const float4 a, const float4 b) -> float {
+			return (a.y - b.y) * P.x + (b.x - a.x) * P.y + a.x * b.y - b.x * a.y;
+			};
+		float areaTri = f(A, B, C);
+		float alpha = f(P, B, C) / areaTri;
+		float beta = f(P, A, C) / areaTri;
+		float gamma = f(P, A, B) / areaTri;
+		return { alpha, beta, gamma };
+	}
+
 	void rasterizeTriangle(const Triangle& tri, const float4x4& plm) const {
 		// ====== implement it in A2 ======
 		// rasterization of a triangle
@@ -665,6 +692,65 @@ public:
 		// you do not need to implement clipping
 		// you may call the "shade" function to get the pixel value
 		// (you may ignore viewDir for now)
+		
+		// rasterize vertices
+		float4 homogenousPos[3];
+		float4 ndcPos[3];
+		for (int k = 0; k < 3; ++k) {
+			// convert to homogenous 4D vector
+			homogenousPos[k] = float4(tri.positions[k], 1.0f);
+			// transform to clip space
+			ndcPos[k] = mul(plm, homogenousPos[k]);
+			if (ndcPos[k].w == 0.0f) continue; // avoid division by zero
+
+			ndcPos[k] = { ndcPos[k].x / ndcPos[k].w, ndcPos[k].y / ndcPos[k].w, ndcPos[k].z / ndcPos[k].w, ndcPos[k].w };
+			ndcPos[k] = ndcToScreen(ndcPos[k]);
+
+			//int i = ndcPos[k].x;
+			//int j = ndcPos[k].y;
+			//if (FrameBuffer.valid(i, j)) {
+			//	FrameBuffer.pixel(i, j) = float3(1.0f);
+			//}
+		}
+
+		HitInfo trinfo;
+		trinfo.material = &materials[tri.idMaterial];
+
+		// Get triangle bounding box
+		int minx = std::max(0, static_cast<int>(std::min(ndcPos[0].x, std::min(ndcPos[1].x, ndcPos[2].x))));
+		int maxx = std::min(globalWidth - 1, static_cast<int>(std::max(ndcPos[0].x, std::max(ndcPos[1].x, ndcPos[2].x))));
+		int miny = std::max(0, static_cast<int>(std::min(ndcPos[0].y, std::min(ndcPos[1].y, ndcPos[2].y))));
+		int maxy = std::min(globalHeight - 1, static_cast<int>(std::max(ndcPos[0].y, std::max(ndcPos[1].y, ndcPos[2].y))));
+
+		for (int j = miny; j <= maxy; ++j) {
+			for (int i = minx; i <= maxx; ++i) {
+				float2 pix = { i + 0.5, j + 0.5 };
+
+				if (isInside(ndcPos, pix)) {
+					// Calculate barycentric coordinates
+					float3 baryCoords = baryInterpolate({pixx, pixy, 1.0f, 1.0f}, ndcPos[0], ndcPos[1], ndcPos[2]);
+
+					float depth = baryCoords.x * ndcPos[0].z / ndcPos[0].w + 
+						baryCoords.y * ndcPos[1].z / ndcPos[1].w + 
+						baryCoords.z * ndcPos[2].z / ndcPos[2].w;
+					
+					//if (depth < FrameBuffer.depth(i, j)) {
+					//	// Update pixel color and depth buffer
+
+					//	float wInterp = baryCoords.x / ndcPos[0].w + baryCoords.y / ndcPos[1].w + baryCoords.z / ndcPos[2].w;
+					//	float pixxInterp = baryCoords.x * ndcPos[0].x / ndcPos[0].w + baryCoords.y * ndcPos[1].x / ndcPos[1].w + baryCoords.z * ndcPos[2].x / ndcPos[2].w;
+					//	float pixyInterp = baryCoords.x * ndcPos[0].y / ndcPos[0].w + baryCoords.y * ndcPos[1].y / ndcPos[1].w + baryCoords.z * ndcPos[2].y / ndcPos[2].w;
+
+					//	trinfo.T = { pixxInterp / wInterp, pixyInterp / wInterp };
+					//	FrameBuffer.pixel(i, j) = trinfo.material->Kd;
+					//	FrameBuffer.depth(i, j) = depth;
+					//	FrameBuffer.valid(i, j);
+					//}
+
+					FrameBuffer.pixel(i, j) = materials[tri.idMaterial].Kd;
+				}
+			}
+		}
 	}
 
 
@@ -2036,7 +2122,7 @@ public:
 
 		// create a window
 		glfwWindowHint(GLFW_RESIZABLE, GL_FALSE);
-		globalGLFWindow = glfwCreateWindow(globalWidth, globalHeight, "Welcome to CS488/688! Ivy A1", NULL, NULL);
+		globalGLFWindow = glfwCreateWindow(globalWidth, globalHeight, "Welcome to CS488/688! Ivy A2", NULL, NULL);
 		if (globalGLFWindow == NULL) {
 			std::cerr << "Failed to open GLFW window." << std::endl;
 			glfwTerminate();
