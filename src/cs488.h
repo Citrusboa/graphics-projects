@@ -670,7 +670,25 @@ public:
 		float L1 = -(pix.x - triPos[1].x) * (triPos[2].y - triPos[1].y) + (pix.y - triPos[1].y) * (triPos[2].x - triPos[1].x);
 		float L2 = -(pix.x - triPos[2].x) * (triPos[0].y - triPos[2].y) + (pix.y - triPos[2].y) * (triPos[0].x - triPos[2].x);
 
-		return ((L0 > 0) && (L1 > 0) && (L2 > 0));
+		if ((L0 > 0) && (L1 > 0) && (L2 > 0)) return true;
+
+		if (L0 == 0.0f && TopLeftEdge(triPos[1], triPos[2]) && L1 >= 0 && L2 >= 0) return true;
+		if (L1 == 0.0f && TopLeftEdge(triPos[2], triPos[0]) && L2 >= 0 && L0 >= 0) return true;
+		if (L2 == 0.0f && TopLeftEdge(triPos[0], triPos[1]) && L0 >= 0 && L1 >= 0) return true;
+		return false;
+	}
+
+	bool TopLeftEdge(const float4 A, const float4 B) const {
+		if (A.y == B.y) return A.x < B.x;
+		return A.y > B.y;
+	}
+
+	bool checkEdgeRules(const float3 w, const float4 triPos[3]) const {
+		bool inside = (w.x > 0 || (w.x == 0 && TopLeftEdge(triPos[1], triPos[2]))) &&
+			(w.y > 0 || (w.y == 0 && TopLeftEdge(triPos[2], triPos[0]))) &&
+			(w.z > 0 || (w.z == 0 && TopLeftEdge(triPos[0], triPos[1])));
+
+		return inside;
 	}
 
 	float3 baryInterpolate(const float4 P, const float4 A, const float4 B, const float4 C) const {
@@ -694,17 +712,18 @@ public:
 		// (you may ignore viewDir for now)
 		
 		// rasterize vertices
-		float4 homogenousPos[3];
+		float4 clipPos[3];
 		float4 ndcPos[3];
+		float4 scrnPos[3];
 		for (int k = 0; k < 3; ++k) {
 			// convert to homogenous 4D vector
-			homogenousPos[k] = float4(tri.positions[k], 1.0f);
+			clipPos[k] = float4(tri.positions[k], 1.0f);
 			// transform to clip space
-			ndcPos[k] = mul(plm, homogenousPos[k]);
-			if (ndcPos[k].w == 0.0f) continue; // avoid division by zero
+			clipPos[k] = mul(plm, clipPos[k]);
+			if (clipPos[k].w == 0.0f) continue; // avoid division by zero
 
-			ndcPos[k] = { ndcPos[k].x / ndcPos[k].w, ndcPos[k].y / ndcPos[k].w, ndcPos[k].z / ndcPos[k].w, ndcPos[k].w };
-			ndcPos[k] = ndcToScreen(ndcPos[k]);
+			ndcPos[k] = { clipPos[k].x / clipPos[k].w, clipPos[k].y / clipPos[k].w, clipPos[k].z / clipPos[k].w, clipPos[k].w };
+			scrnPos[k] = ndcToScreen(ndcPos[k]);
 
 			//int i = ndcPos[k].x;
 			//int j = ndcPos[k].y;
@@ -713,41 +732,57 @@ public:
 			//}
 		}
 
+		// Get triangle bounding box
+		int minx = std::max(0, static_cast<int>(std::min(scrnPos[0].x, std::min(scrnPos[1].x, scrnPos[2].x))));
+		int maxx = std::min(globalWidth - 1, static_cast<int>(std::max(scrnPos[0].x, std::max(scrnPos[1].x, scrnPos[2].x))));
+		int miny = std::max(0, static_cast<int>(std::min(scrnPos[0].y, std::min(scrnPos[1].y, scrnPos[2].y))));
+		int maxy = std::min(globalHeight - 1, static_cast<int>(std::max(scrnPos[0].y, std::max(scrnPos[1].y, scrnPos[2].y))));
+
 		HitInfo trinfo;
 		trinfo.material = &materials[tri.idMaterial];
 
-		// Get triangle bounding box
-		int minx = std::max(0, static_cast<int>(std::min(ndcPos[0].x, std::min(ndcPos[1].x, ndcPos[2].x))));
-		int maxx = std::min(globalWidth - 1, static_cast<int>(std::max(ndcPos[0].x, std::max(ndcPos[1].x, ndcPos[2].x))));
-		int miny = std::max(0, static_cast<int>(std::min(ndcPos[0].y, std::min(ndcPos[1].y, ndcPos[2].y))));
-		int maxy = std::min(globalHeight - 1, static_cast<int>(std::max(ndcPos[0].y, std::max(ndcPos[1].y, ndcPos[2].y))));
-
 		for (int j = miny; j <= maxy; ++j) {
 			for (int i = minx; i <= maxx; ++i) {
-				float2 pix = { i + 0.5, j + 0.5 };
+				float2 pix = float2(i + 0.5, j + 0.5);
 
-				if (isInside(ndcPos, pix)) {
-					// Calculate barycentric coordinates
-					float3 baryCoords = baryInterpolate({pixx, pixy, 1.0f, 1.0f}, ndcPos[0], ndcPos[1], ndcPos[2]);
+				auto edgefunc = [](const float2 P, const float2 a, const float2 b) -> float {
+					return (a.y - b.y) * P.x + (b.x - a.x) * P.y + a.x * b.y - b.x * a.y;
+					};
 
-					float depth = baryCoords.x * ndcPos[0].z / ndcPos[0].w + 
-						baryCoords.y * ndcPos[1].z / ndcPos[1].w + 
-						baryCoords.z * ndcPos[2].z / ndcPos[2].w;
-					
-					//if (depth < FrameBuffer.depth(i, j)) {
-					//	// Update pixel color and depth buffer
+				float areaTri = edgefunc({ scrnPos[0].x, scrnPos[0].y }, { scrnPos[1].x, scrnPos[1].y }, { scrnPos[2].x, scrnPos[2].y});
+				if (areaTri <= 0) return; // Degenerate triangle
 
-					//	float wInterp = baryCoords.x / ndcPos[0].w + baryCoords.y / ndcPos[1].w + baryCoords.z / ndcPos[2].w;
-					//	float pixxInterp = baryCoords.x * ndcPos[0].x / ndcPos[0].w + baryCoords.y * ndcPos[1].x / ndcPos[1].w + baryCoords.z * ndcPos[2].x / ndcPos[2].w;
-					//	float pixyInterp = baryCoords.x * ndcPos[0].y / ndcPos[0].w + baryCoords.y * ndcPos[1].y / ndcPos[1].w + baryCoords.z * ndcPos[2].y / ndcPos[2].w;
+				float w_alpha = edgefunc(pix, { scrnPos[1].x, scrnPos[1].y }, { scrnPos[2].x, scrnPos[2].y });
+				float w_beta = edgefunc(pix, { scrnPos[0].x, scrnPos[0].y }, { scrnPos[2].x, scrnPos[2].y });
+				float w_gamma = edgefunc(pix, { scrnPos[0].x, scrnPos[0].y }, { scrnPos[1].x, scrnPos[1].y });
+				float3 w_area = { w_alpha, w_beta, w_gamma };
 
-					//	trinfo.T = { pixxInterp / wInterp, pixyInterp / wInterp };
-					//	FrameBuffer.pixel(i, j) = trinfo.material->Kd;
-					//	FrameBuffer.depth(i, j) = depth;
-					//	FrameBuffer.valid(i, j);
-					//}
+				if (isInside(scrnPos, pix)) {
+					float3 bary = { w_alpha / clipPos[0].x, w_beta / clipPos[1].w, w_gamma / clipPos[2].w};
+					float denom = bary.x + bary.y + bary.z;
+					bary = { bary.x / denom, bary.y / denom, bary.z / denom };
 
-					FrameBuffer.pixel(i, j) = materials[tri.idMaterial].Kd;
+					float3 w_recip = { 1.0f / clipPos[0].w, 1.0f / clipPos[1].w, 1.0f / clipPos[2].w };
+					float w_interp = bary.x * w_recip.x + bary.y * w_recip.y + bary.z * w_recip.z;
+
+					// Perspective-correct depth interpolation
+					//float depth = (bary.x * scrnPos[0].z * w_recip.x +
+					//	bary.y * scrnPos[1].z * w_recip.y +
+					//	bary.z * scrnPos[2].z * w_recip.z) / w_interp;
+
+					float depth = bary.x * scrnPos[0].z + bary.y * scrnPos[1].z + bary.z * scrnPos[2].z;
+
+					if (FrameBuffer.valid(i, j) && depth < FrameBuffer.depth(i, j)) {
+						float w_interp = bary.x / clipPos[0].w + bary.y / clipPos[1].w + bary.z / clipPos[2].w;
+
+						float2 texcoords = bary.x * tri.texcoords[0] + bary.y * tri.texcoords[1] + bary.z * tri.texcoords[2];
+						
+						trinfo.T = texcoords;
+
+						FrameBuffer.pixel(i, j) = trinfo.material->Kd;
+						FrameBuffer.depth(i, j) = depth;
+					}
+					/*FrameBuffer.pixel(i, j) = trinfo.material->Kd;*/
 				}
 			}
 		}
