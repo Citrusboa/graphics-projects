@@ -35,7 +35,7 @@ using namespace linalg::aliases;
 #include <cfloat>
 #include <chrono>
 
-#define LAMBERTIAN_SHADOW // Define this for shadow tracing, comment out if not
+//#define LAMBERTIAN_SHADOW // Define this for shadow tracing, comment out if not
 
 // main window
 static GLFWwindow* globalGLFWindow;
@@ -56,7 +56,7 @@ constexpr float RadToDeg = 180.0f / PI;
 // for ray tracing
 constexpr float Epsilon = 2e-6f; // 5e-5f;
 constexpr float miniEps = 1e-6f;
-
+constexpr float edgeEps = 1e-8f;
 
 // amount the camera moves with a mouse and a keyboard
 constexpr float ANGFACT = 0.2f;
@@ -679,14 +679,14 @@ public:
 	}
 
 	bool TopLeftEdge(const float4 A, const float4 B) const {
-		if (A.y == B.y) return A.x < B.x;
+		if (std::abs(A.y - B.y) < edgeEps) return A.x < B.x;
 		return A.y > B.y;
 	}
 
 	bool checkEdgeRules(const float3 w, const float4 triPos[3]) const {
-		bool inside = (w.x > 0 || (w.x == 0 && TopLeftEdge(triPos[1], triPos[2]))) &&
-			(w.y > 0 || (w.y == 0 && TopLeftEdge(triPos[2], triPos[0]))) &&
-			(w.z > 0 || (w.z == 0 && TopLeftEdge(triPos[0], triPos[1])));
+		bool inside = (w.x > 0 || (std::abs(w.x) < edgeEps && TopLeftEdge(triPos[1], triPos[2]))) &&
+			(w.y > 0 || (std::abs(w.y) < edgeEps && TopLeftEdge(triPos[2], triPos[0]))) &&
+			(w.z > 0 || (std::abs(w.z) < edgeEps && TopLeftEdge(triPos[0], triPos[1])));
 
 		return inside;
 	}
@@ -715,15 +715,18 @@ public:
 		float4 clipPos[3];
 		float4 ndcPos[3];
 		float4 scrnPos[3];
+		float wRecip[3];
 		for (int k = 0; k < 3; ++k) {
 			// convert to homogenous 4D vector
 			clipPos[k] = float4(tri.positions[k], 1.0f);
 			// transform to clip space
 			clipPos[k] = mul(plm, clipPos[k]);
-			if (clipPos[k].w == 0.0f) continue; // avoid division by zero
+			if (std::abs(clipPos[k].w) < edgeEps) continue; // avoid division by zero
 
 			ndcPos[k] = { clipPos[k].x / clipPos[k].w, clipPos[k].y / clipPos[k].w, clipPos[k].z / clipPos[k].w, clipPos[k].w };
 			scrnPos[k] = ndcToScreen(ndcPos[k]);
+			
+			wRecip[k] = 1.0f / clipPos[k].w;
 
 			//int i = ndcPos[k].x;
 			//int j = ndcPos[k].y;
@@ -741,49 +744,66 @@ public:
 		HitInfo trinfo;
 		trinfo.material = &materials[tri.idMaterial];
 
+		auto edgefunc = [](const float2 P, const float2 a, const float2 b) -> float {
+			return (a.y - b.y) * P.x + (b.x - a.x) * P.y + a.x * b.y - b.x * a.y;
+			};
+
+		struct Edge {
+			float a, b, c;
+			bool isTopLeft;
+		} edges[3];
+
+		float2 v[3] = {
+			{scrnPos[0].x, scrnPos[0].y},
+			{scrnPos[1].x, scrnPos[1].y},
+			{scrnPos[2].x, scrnPos[2].y}
+		};
+		
+		float areaTri = edgefunc(v[0], v[1], v[2]);
+		if (std::abs(areaTri) < edgeEps) return;
+
+		// Initialize depth buffer
+		//for (int j = miny; j <= maxy; ++j) {
+		//	for (int i = minx; i <= maxx; ++i) {
+		//		FrameBuffer.depth(i, j) = std::numeric_limits<float>::infinity();
+		//	}
+		//}
+
 		for (int j = miny; j <= maxy; ++j) {
 			for (int i = minx; i <= maxx; ++i) {
 				float2 pix = float2(i + 0.5, j + 0.5);
 
-				auto edgefunc = [](const float2 P, const float2 a, const float2 b) -> float {
-					return (a.y - b.y) * P.x + (b.x - a.x) * P.y + a.x * b.y - b.x * a.y;
-					};
-
-				float areaTri = edgefunc({ scrnPos[0].x, scrnPos[0].y }, { scrnPos[1].x, scrnPos[1].y }, { scrnPos[2].x, scrnPos[2].y});
-				if (areaTri <= 0) return; // Degenerate triangle
-
-				float w_alpha = edgefunc(pix, { scrnPos[1].x, scrnPos[1].y }, { scrnPos[2].x, scrnPos[2].y });
-				float w_beta = edgefunc(pix, { scrnPos[0].x, scrnPos[0].y }, { scrnPos[2].x, scrnPos[2].y });
-				float w_gamma = edgefunc(pix, { scrnPos[0].x, scrnPos[0].y }, { scrnPos[1].x, scrnPos[1].y });
+				float w_alpha = edgefunc(pix, v[1], v[2]);
+				float w_beta = edgefunc(pix, v[2], v[0]);
+				float w_gamma = edgefunc(pix, v[0], v[1]);
 				float3 w_area = { w_alpha, w_beta, w_gamma };
+				
+				if (!checkEdgeRules(w_area, scrnPos)) continue;
 
-				if (isInside(scrnPos, pix)) {
-					float3 bary = { w_alpha / clipPos[0].x, w_beta / clipPos[1].w, w_gamma / clipPos[2].w};
-					float denom = bary.x + bary.y + bary.z;
-					bary = { bary.x / denom, bary.y / denom, bary.z / denom };
+				float3 bary_p = { w_alpha * wRecip[0], w_beta * wRecip[1], w_gamma * wRecip[2] };
+				float denom = bary_p.x + bary_p.y + bary_p.z;
+				if (std::abs(denom) < edgeEps) continue;
+				
+				bary_p = { bary_p.x / denom, bary_p.y / denom, bary_p.z / denom };
+				
+					// Perspective-correct interpolation
+				float depth = bary_p.x * scrnPos[0].z + bary_p.y * scrnPos[1].z + bary_p.z * scrnPos[2].z;
 
-					float3 w_recip = { 1.0f / clipPos[0].w, 1.0f / clipPos[1].w, 1.0f / clipPos[2].w };
-					float w_interp = bary.x * w_recip.x + bary.y * w_recip.y + bary.z * w_recip.z;
+				if (FrameBuffer.valid(i, j) && depth < FrameBuffer.depth(i, j)) {
+					float2 texcoord = (
+						bary_p.x * tri.texcoords[0] +
+						bary_p.y * tri.texcoords[1] +
+						bary_p.z * tri.texcoords[2] 
+						);
 
-					// Perspective-correct depth interpolation
-					//float depth = (bary.x * scrnPos[0].z * w_recip.x +
-					//	bary.y * scrnPos[1].z * w_recip.y +
-					//	bary.z * scrnPos[2].z * w_recip.z) / w_interp;
+					trinfo.T = texcoord;
 
-					float depth = bary.x * scrnPos[0].z + bary.y * scrnPos[1].z + bary.z * scrnPos[2].z;
+					FrameBuffer.pixel(i, j) = shade(trinfo, float3(1.0f));
+					FrameBuffer.depth(i, j) = depth;
 
-					if (FrameBuffer.valid(i, j) && depth < FrameBuffer.depth(i, j)) {
-						float w_interp = bary.x / clipPos[0].w + bary.y / clipPos[1].w + bary.z / clipPos[2].w;
-
-						float2 texcoords = bary.x * tri.texcoords[0] + bary.y * tri.texcoords[1] + bary.z * tri.texcoords[2];
-						
-						trinfo.T = texcoords;
-
-						FrameBuffer.pixel(i, j) = trinfo.material->Kd;
-						FrameBuffer.depth(i, j) = depth;
-					}
-					/*FrameBuffer.pixel(i, j) = trinfo.material->Kd;*/
 				}
+				//FrameBuffer.pixel(i, j) = shade(trinfo, float3(1.0f));
+
 			}
 		}
 	}
